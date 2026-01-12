@@ -1,13 +1,16 @@
 let students = [];
 
+// تعريف عناصر الصفحة
 const statusEl = document.getElementById("status");
-const qEl = document.getElementById("q");
-const tbody = document.getElementById("tbody");
+const qEl = document.getElementById("q"); // مربع البحث
+const tbody = document.getElementById("tbody"); // جسم الجدول
 
+// دالة تحديث شريط الحالة
 function setStatus(msg) {
   if (statusEl) statusEl.textContent = msg;
 }
 
+// دالة تنظيف النصوص (إزالة المسافات الزائدة وتوحيد الحروف)
 function normalize(s) {
   return (s ?? "")
     .toString()
@@ -16,8 +19,52 @@ function normalize(s) {
     .toLowerCase();
 }
 
-// CSV parser بسيط يدعم الفواصل والاقتباسات
+// 1. التشغيل التلقائي عند فتح الصفحة
+document.addEventListener('DOMContentLoaded', () => {
+  // يحاول تحميل data.csv تلقائياً
+  fetchCSV('data.csv');
+});
+
+// دالة جلب الملف من الرابط (GitHub)
+async function fetchCSV(url) {
+  setStatus("جاري الاتصال بقاعدة البيانات...");
+  try {
+    // إضافة timestamp لمنع المتصفح من حفظ النسخة القديمة
+    const response = await fetch(url + '?t=' + new Date().getTime());
+    
+    if (!response.ok) {
+      throw new Error("لم يتم العثور على الملف");
+    }
+
+    const text = await response.text();
+    processData(text); // معالجة البيانات
+    setStatus("تم تحميل البيانات بنجاح. ابحث الآن!");
+    
+  } catch (error) {
+    console.error(error);
+    setStatus("لم يتم العثور على ملف data.csv تلقائياً. يمكنك رفعه يدوياً.");
+  }
+}
+
+// دالة معالجة النص وتحويله لبيانات
+function processData(csvText) {
+  const rows = parseCSV(csvText);
+  if (rows.length < 2) {
+    setStatus("الملف فارغ أو غير صالح");
+    return;
+  }
+  students = mapRowsToObjects(rows);
+  
+  // عرض أول 50 طالب للتأكد
+  render(students.slice(0, 50));
+  setStatus(`تم تحميل ${students.length} طالب. جاهز للبحث.`);
+}
+
+// قارئ CSV يدعم الفواصل والاقتباسات
 function parseCSV(text) {
+  // حذف أي رموز غريبة في بداية الملف (BOM)
+  text = text.replace(/^\uFEFF/, '');
+  
   const rows = [];
   let row = [];
   let cur = "";
@@ -32,7 +79,7 @@ function parseCSV(text) {
     }
     if (ch === '"') { inQuotes = !inQuotes; continue; }
 
-    if (!inQuotes && (ch === "," || ch === "\t")) { // يدعم CSV أو TSV
+    if (!inQuotes && (ch === "," || ch === "\t" || ch === ";")) { 
       row.push(cur); cur = ""; continue;
     }
 
@@ -42,42 +89,44 @@ function parseCSV(text) {
       row = []; cur = "";
       continue;
     }
-
     cur += ch;
   }
-
-  // آخر خلية
   if (cur.length || row.length) {
     row.push(cur);
     rows.push(row);
   }
-
   return rows.filter(r => r.some(c => c.trim() !== ""));
 }
 
+// ربط الأعمدة (ذكاء في تحديد مكان الاسم والرقم)
 function mapRowsToObjects(rows) {
   const header = rows[0].map(h => normalize(h));
   const data = rows.slice(1);
 
-  // نحاول نتعرّف الأعمدة حتى لو أسماءها مختلفة
+  // البحث عن أرقام الأعمدة بناءً على الكلمات المفتاحية في ملفك
   const col = {
-    name: header.findIndex(h => h.includes("الاسم") || h.includes("name")),
-    id: header.findIndex(h => h.includes("الرقم") || h.includes("id") || h.includes("student")),
-    grade: header.findIndex(h => h.includes("الصف") || h.includes("grade") || h.includes("class")),
-    section: header.findIndex(h => h.includes("الشعبة") || h.includes("section")),
-    nat: header.findIndex(h => h.includes("الجنسية") || h.includes("national"))
+    name: header.findIndex(h => h.includes("اسم") || h.includes("name")),
+    id: header.findIndex(h => h.includes("رقم") || h.includes("id")),
+    grade: header.findIndex(h => h.includes("صف") || h.includes("grade")),
+    section: header.findIndex(h => h.includes("شعبة") || h.includes("section")),
+    nat: header.findIndex(h => h.includes("جنسية") || h.includes("national"))
   };
 
+  // إذا لم يجد العناوين، نستخدم الترتيب الافتراضي (0,1,2,3,4)
+  const safeIndex = (idx, fallback) => idx > -1 ? idx : fallback;
+
   return data.map(r => ({
-    name: r[col.name] ?? "",
-    id: r[col.id] ?? "",
-    grade: r[col.grade] ?? "",
-    section: r[col.section] ?? "",
-    nat: r[col.nat] ?? "",
+    name: r[safeIndex(col.name, 0)] ?? "", // العمود الأول للاسم
+    id: r[safeIndex(col.id, 1)] ?? "",     // العمود الثاني للرقم
+    grade: r[safeIndex(col.grade, 2)] ?? "",
+    section: r[safeIndex(col.section, 3)] ?? "",
+    nat: r[safeIndex(col.nat, 4)] ?? "",
   }));
 }
 
+// دالة رسم الجدول
 function render(list) {
+  if(!tbody) return;
   tbody.innerHTML = "";
   list.forEach((s, idx) => {
     const tr = document.createElement("tr");
@@ -93,21 +142,23 @@ function render(list) {
   });
 }
 
+// دالة البحث
 function doSearch() {
   const q = normalize(qEl.value);
   if (!students.length) {
-    setStatus("لا توجد بيانات: حمّل ملف CSV أولاً.");
+    setStatus("لا توجد بيانات: انتظر التحميل أو ارفع الملف يدوياً.");
     return;
   }
   if (!q) {
-    render(students.slice(0, 200));
-    setStatus(`عرض أول 200 من أصل ${students.length}.`);
+    render(students.slice(0, 50));
+    setStatus(`عرض أول 50 من أصل ${students.length}.`);
     return;
   }
 
   const res = students.filter(s => {
     const name = normalize(s.name);
     const id = normalize(s.id);
+    // البحث بالاسم أو الرقم
     return name.includes(q) || id.includes(q);
   });
 
@@ -115,39 +166,34 @@ function doSearch() {
   setStatus(`تم العثور على ${res.length} نتيجة.`);
 }
 
+// التحميل اليدوي (احتياطي)
 function loadCSVFromFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const text = reader.result;
-      const rows = parseCSV(text);
-      students = mapRowsToObjects(rows);
-      setStatus(`تم تحميل ${students.length} طالب. اكتب للبحث.`);
-      render(students.slice(0, 50));
+      processData(reader.result);
     } catch (e) {
-      setStatus("فشل قراءة الملف. تأكد أنه CSV صحيح.");
+      setStatus("فشل قراءة الملف.");
       console.error(e);
     }
   };
-  reader.onerror = () => setStatus("خطأ في قراءة الملف.");
   reader.readAsText(file, "utf-8");
 }
 
+// تفعيل الأزرار
 document.getElementById("loadBtn")?.addEventListener("click", () => {
   const file = document.getElementById("csvFile")?.files?.[0];
   if (!file) {
     setStatus("اختر ملف CSV أولاً.");
     return;
   }
-  setStatus("جاري تحميل البيانات...");
   loadCSVFromFile(file);
 });
 
 document.getElementById("btn")?.addEventListener("click", doSearch);
 document.getElementById("clear")?.addEventListener("click", () => {
-  qEl.value = "";
-  render(students.slice(0, 50));
-  setStatus(students.length ? `تم تحميل ${students.length} طالب.` : "لم يتم تحميل ملف بعد.");
+  if(qEl) qEl.value = "";
+  doSearch();
 });
 qEl?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") doSearch();
